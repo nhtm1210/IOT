@@ -1,0 +1,4 @@
+.pio/
+**/.pio/
+**/include/secrets.h
+.vscode/

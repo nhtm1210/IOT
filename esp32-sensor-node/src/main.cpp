@@ -92,7 +92,6 @@ void connectMqtt() {
 }
 
 void publishTelemetry(bool pir1, bool pir2, bool doorOpen) {
-  if (!mqtt.connected()) return;
   JsonDocument doc;
   doc["schema_version"] = 1;
   char messageId[48];
@@ -128,6 +127,8 @@ void publishTelemetry(bool pir1, bool pir2, bool doorOpen) {
     Serial.println("[mqtt] telemetry serialization failed");
     return;
   }
+  Serial.printf("[read] %s\n", payload);
+  if (!mqtt.connected()) return;
   if (mqtt.publish(SENSOR_TOPIC, payload, false)) {
     Serial.printf("[telemetry] %s\n", payload);
   } else {
