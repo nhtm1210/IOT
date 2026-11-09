@@ -19,6 +19,8 @@ constexpr uint32_t WIFI_RETRY_MS = 10000;
 constexpr uint32_t MQTT_RETRY_MS = 5000;
 constexpr char DEVICE_ID[] = "esp32_cluster2";
 constexpr char SENSOR_TOPIC[] = "smarthome/sensor/cluster2";
+constexpr char COMMAND_TOPIC[] = "smarthome/device/cluster2/command";
+constexpr char ACK_TOPIC[] = "smarthome/device/cluster2/ack";
 constexpr char STATUS_TOPIC[] = "smarthome/device/cluster2/status";
 constexpr char SYSTEM_TOPIC[] = "smarthome/system/cluster2/status";
 
@@ -27,6 +29,8 @@ BH1750 lightMeter;
 bool bh1750Found = false;
 bool lightOn = false;
 bool fanOn = false;
+String currentMode = "AUTO";
+
 uint32_t lastSampleAt = 0;
 uint32_t lastWiFiAttempt = 0;
 uint32_t lastMqttAttempt = 0;
@@ -34,19 +38,62 @@ uint32_t messageSequence = 0;
 WiFiClient networkClient;
 PubSubClient mqtt(networkClient);
 
+void writePin(int pin, bool enabled, bool activeHigh) {
+  const bool pinHigh = activeHigh ? enabled : !enabled;
+  digitalWrite(pin, pinHigh ? HIGH : LOW);
+}
+
+void setLight(bool enabled) {
+  if (lightOn == enabled) return;
+  lightOn = enabled;
+  writePin(PIN_LIGHT_OUTPUT, enabled, LIGHT_ACTIVE_HIGH);
+  Serial.printf("[light] %s (mode=%s, darkness threshold: ADC < %d)\n",
+                enabled ? "ON" : "OFF", currentMode.c_str(), ANALOG_DARK_THRESHOLD);
+}
+
+void setFan(bool enabled) {
+  if (fanOn == enabled) return;
+  fanOn = enabled;
+  writePin(PIN_FAN_RELAY, enabled, RELAY_ACTIVE_HIGH);
+  Serial.printf("[fan] %s (mode=%s)\n", enabled ? "ON" : "OFF", currentMode.c_str());
+}
+
 void publishStatus() {
   if (!mqtt.connected()) return;
   JsonDocument doc;
   doc["schema_version"] = 1;
   doc["device_id"] = DEVICE_ID;
   doc["online"] = true;
-  doc["mode"] = "AUTO";
+  doc["mode"] = currentMode;
   doc["outputs"]["light"] = lightOn;
   doc["outputs"]["fan"] = fanOn;
-  doc["firmware_version"] = "1.0.0";
+  doc["firmware_version"] = "1.1.0";
   char payload[256];
   const size_t size = serializeJson(doc, payload, sizeof(payload));
-  if (size && size < sizeof(payload)) mqtt.publish(STATUS_TOPIC, payload, true);
+  if (size && size < sizeof(payload)) {
+    mqtt.publish(STATUS_TOPIC, payload, true);
+  }
+}
+
+void publishAck(const char *commandId, bool success, const char *error) {
+  if (!mqtt.connected()) return;
+  JsonDocument doc;
+  doc["schema_version"] = 1;
+  doc["command_id"] = commandId;
+  doc["device_id"] = DEVICE_ID;
+  doc["mode"] = currentMode;
+  doc["success"] = success;
+  doc["error"] = (error && error[0]) ? error : nullptr;
+  doc["outputs"]["light"] = lightOn;
+  doc["outputs"]["fan"] = fanOn;
+  doc["timestamp_ms"] = millis();
+
+  char payload[320];
+  const size_t size = serializeJson(doc, payload, sizeof(payload));
+  if (size && size < sizeof(payload)) {
+    mqtt.publish(ACK_TOPIC, payload, false);
+    Serial.printf("[ack] %s\n", payload);
+  }
 }
 
 void publishTelemetry(int analogLight, bool isDark, float temperature,
@@ -56,9 +103,11 @@ void publishTelemetry(int analogLight, bool isDark, float temperature,
   doc["schema_version"] = 1;
   char messageId[48];
   snprintf(messageId, sizeof(messageId), "cluster2_%08lx_%lu",
-           (unsigned long)(ESP.getEfuseMac() & 0xffffffff), (unsigned long)++messageSequence);
+           (unsigned long)(ESP.getEfuseMac() & 0xffffffff),
+           (unsigned long)++messageSequence);
   doc["message_id"] = messageId;
   doc["device_id"] = DEVICE_ID;
+  doc["mode"] = currentMode;
   doc["timestamp_ms"] = millis();
   if (isfinite(temperature)) doc["temperature_c"] = temperature;
   else doc["temperature_c"] = nullptr;
@@ -70,11 +119,89 @@ void publishTelemetry(int analogLight, bool isDark, float temperature,
   doc["is_dark"] = isDark;
   doc["outputs"]["light"] = lightOn;
   doc["outputs"]["fan"] = fanOn;
+
   char payload[384];
   const size_t size = serializeJson(doc, payload, sizeof(payload));
   if (size && size < sizeof(payload)) {
-    if (mqtt.publish(SENSOR_TOPIC, payload, false)) Serial.printf("[mqtt] %s\n", payload);
-    else Serial.println("[mqtt] telemetry publish failed");
+    if (mqtt.publish(SENSOR_TOPIC, payload, false)) {
+      Serial.printf("[mqtt] %s\n", payload);
+    } else {
+      Serial.println("[mqtt] telemetry publish failed");
+    }
+  }
+}
+
+void handleCommand(const byte *payload, unsigned int length) {
+  JsonDocument doc;
+  const DeserializationError parseError = deserializeJson(doc, payload, length);
+  const char *commandId = doc["command_id"] | "";
+  if (parseError || !commandId[0]) {
+    publishAck(commandId, false, "INVALID_COMMAND");
+    return;
+  }
+
+  const char *target = doc["device_id"] | DEVICE_ID;
+  if (strcmp(target, DEVICE_ID) != 0 &&
+      strcmp(target, "light_2") != 0 &&
+      strcmp(target, "light_1") != 0 &&
+      strcmp(target, "fan_1") != 0) {
+    publishAck(commandId, false, "UNKNOWN_DEVICE");
+    return;
+  }
+
+  const char *mode = doc["mode"] | currentMode.c_str();
+  if (strcmp(mode, "AUTO") != 0 && strcmp(mode, "MANUAL") != 0) {
+    publishAck(commandId, false, "INVALID_MODE");
+    return;
+  }
+
+  bool nextLight = lightOn;
+  bool nextFan = fanOn;
+  bool hasOutputChange = false;
+
+  if (doc["outputs"].is<JsonObjectConst>()) {
+    JsonObjectConst req = doc["outputs"].as<JsonObjectConst>();
+    if (req["light"].is<bool>()) {
+      nextLight = req["light"].as<bool>();
+      hasOutputChange = true;
+    }
+    if (req["fan"].is<bool>()) {
+      nextFan = req["fan"].as<bool>();
+      hasOutputChange = true;
+    }
+  } else if (doc["state"].is<const char *>()) {
+    const char *state = doc["state"];
+    if (strcmp(state, "ON") == 0 || strcmp(state, "OFF") == 0) {
+      const bool enabled = (strcmp(state, "ON") == 0);
+      if (strcmp(target, "light_2") == 0 || strcmp(target, "light_1") == 0) {
+        nextLight = enabled;
+        hasOutputChange = true;
+      } else if (strcmp(target, "fan_1") == 0) {
+        nextFan = enabled;
+        hasOutputChange = true;
+      } else {
+        publishAck(commandId, false, "DEVICE_REQUIRED");
+        return;
+      }
+    } else {
+      publishAck(commandId, false, "INVALID_STATE");
+      return;
+    }
+  }
+
+  currentMode = mode;
+  if (hasOutputChange) {
+    setLight(nextLight);
+    setFan(nextFan);
+  }
+
+  publishAck(commandId, true, nullptr);
+  publishStatus();
+}
+
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
+  if (strcmp(topic, COMMAND_TOPIC) == 0) {
+    handleCommand(payload, length);
   }
 }
 
@@ -103,41 +230,35 @@ void connectMqtt() {
     Serial.printf("[mqtt] connect failed: %d\n", mqtt.state());
     return;
   }
+  mqtt.subscribe(COMMAND_TOPIC, 1);
   mqtt.publish(SYSTEM_TOPIC,
-      "{\"schema_version\":1,\"device_id\":\"esp32_cluster2\",\"online\":true,\"firmware_version\":\"1.0.0\"}", true);
+      "{\"schema_version\":1,\"device_id\":\"esp32_cluster2\",\"online\":true,\"firmware_version\":\"1.1.0\"}", true);
   publishStatus();
-  Serial.println("[mqtt] connected");
-}
-
-void writeRelay(int pin, bool enabled) {
-  const bool pinHigh = RELAY_ACTIVE_HIGH ? enabled : !enabled;
-  digitalWrite(pin, pinHigh ? HIGH : LOW);
-}
-
-void setLight(bool enabled) {
-  if (lightOn == enabled) return;
-  lightOn = enabled;
-  digitalWrite(PIN_LIGHT_OUTPUT, enabled ? HIGH : LOW);
-  Serial.printf("[light] %s (darkness threshold: ADC < %d)\n",
-                enabled ? "ON" : "OFF", ANALOG_DARK_THRESHOLD);
-}
-
-void setFan(bool enabled) {
-  if (fanOn == enabled) return;
-  fanOn = enabled;
-  writeRelay(PIN_FAN_RELAY, enabled);
-  Serial.printf("[fan] relay %s\n", enabled ? "ON" : "OFF");
+  Serial.println("[mqtt] connected & subscribed to command topic");
 }
 
 void sampleAndControl() {
   const int analogLight = analogRead(PIN_LDR_ANALOG);
-  const bool isDark = analogLight < ANALOG_DARK_THRESHOLD;
-  setLight(isDark);
+  float lux = NAN;
+  if (bh1750Found) {
+    lux = lightMeter.readLightLevel();
+  }
+
+  // Xác định trời tối / trời sáng:
+  // - Mặc định dùng giá trị analog LDR (< ANALOG_DARK_THRESHOLD là trời tối)
+  // - Nếu BH1750 có kết nối và đọc hợp lệ trong khi LDR không nối (ADC == 0), hỗ trợ đánh giá theo lux
+  bool isDark = (analogLight < ANALOG_DARK_THRESHOLD);
+  if (bh1750Found && isfinite(lux) && lux >= 0 && analogLight == 0) {
+    isDark = (lux < LUX_DARK_THRESHOLD);
+  }
+
+  // Kịch bản tự động cho đèn: trời tối -> bật đèn, trời sáng -> tắt đèn
+  if (currentMode == "AUTO") {
+    setLight(isDark);
+  }
 
   const float temperature = dht.readTemperature();
   const float humidity = dht.readHumidity();
-  float lux = NAN;
-  if (bh1750Found) lux = lightMeter.readLightLevel();
 
   Serial.printf("[light sensor] LDR ADC=%d, dark=%s, BH1750=",
                 analogLight, isDark ? "yes" : "no");
@@ -148,15 +269,21 @@ void sampleAndControl() {
   if (!isfinite(temperature) || !isfinite(humidity)) {
     Serial.println("[DHT] read error; fan state unchanged");
     publishTelemetry(analogLight, isDark, temperature, humidity, lux);
+    publishStatus();
     return;
   }
 
   Serial.printf("[DHT] temperature=%.1f C, humidity=%.1f %%\n", temperature, humidity);
-  if (!fanOn && temperature >= FAN_TEMP_ON_C && humidity <= FAN_HUMIDITY_ON_PCT) {
-    setFan(true);
-  } else if (fanOn && (temperature <= FAN_TEMP_OFF_C || humidity >= FAN_HUMIDITY_OFF_PCT)) {
-    setFan(false);
+
+  // Kịch bản tự động cho quạt:
+  // Nếu độ ẩm thấp (<= FAN_HUMIDITY_LOW_PCT) VÀ nhiệt độ cao (>= FAN_TEMP_HIGH_C) -> Bật quạt
+  // Không thỏa điều kiện -> Tắt quạt
+  if (currentMode == "AUTO") {
+    const bool shouldTurnOnFan =
+        (temperature >= FAN_TEMP_HIGH_C) && (humidity <= FAN_HUMIDITY_LOW_PCT);
+    setFan(shouldTurnOnFan);
   }
+
   publishTelemetry(analogLight, isDark, temperature, humidity, lux);
   publishStatus();
 }
@@ -166,8 +293,9 @@ void setup() {
   Serial.begin(115200);
   delay(300);
 
-  digitalWrite(PIN_LIGHT_OUTPUT, LOW);
-  digitalWrite(PIN_FAN_RELAY, RELAY_ACTIVE_HIGH ? LOW : HIGH);
+  // Đưa thiết bị đầu ra (đèn, quạt) về trạng thái TẮT an toàn khi khởi động
+  writePin(PIN_LIGHT_OUTPUT, false, LIGHT_ACTIVE_HIGH);
+  writePin(PIN_FAN_RELAY, false, RELAY_ACTIVE_HIGH);
   pinMode(PIN_LIGHT_OUTPUT, OUTPUT);
   pinMode(PIN_FAN_RELAY, OUTPUT);
   pinMode(PIN_LDR_ANALOG, INPUT);
@@ -176,20 +304,21 @@ void setup() {
   dht.begin();
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   bh1750Found = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE, 0x23, &Wire);
+
   WiFi.setAutoReconnect(true);
   WiFi.persistent(false);
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(mqttCallback);
   mqtt.setBufferSize(512);
   mqtt.setKeepAlive(30);
 
-  Serial.println("\n[boot] cluster 2 temperature + light + light/fan outputs test");
+  Serial.println("\n[boot] Cluster 2 Environment & Light/Fan Automation Firmware 1.1.0");
   Serial.printf("[pins] DHT=GPIO%d, LDR=GPIO%d, I2C SDA/SCL=%d/%d, light=GPIO%d, fan relay=GPIO%d\n",
                 PIN_DHT, PIN_LDR_ANALOG, PIN_I2C_SDA, PIN_I2C_SCL,
                 PIN_LIGHT_OUTPUT, PIN_FAN_RELAY);
   Serial.printf("[BH1750] %s\n", bh1750Found ? "detected" : "not detected; using LDR ADC for light control");
-  Serial.printf("[thresholds] dark ADC<%d; fan ON if temp>=%.1f C AND humidity<=%.1f%%; fan OFF if temp<=%.1f C OR humidity>=%.1f%%\n",
-                ANALOG_DARK_THRESHOLD, FAN_TEMP_ON_C, FAN_HUMIDITY_ON_PCT,
-                FAN_TEMP_OFF_C, FAN_HUMIDITY_OFF_PCT);
+  Serial.printf("[rules] dark ADC<%d -> Light ON else OFF; temp>=%.1f C AND humidity<=%.1f%% -> Fan ON else OFF\n",
+                ANALOG_DARK_THRESHOLD, FAN_TEMP_HIGH_C, FAN_HUMIDITY_LOW_PCT);
   connectWiFi();
 }
 

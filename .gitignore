@@ -2,3 +2,9 @@
 **/.pio/
 **/include/secrets.h
 .vscode/
+__pycache__/
+**/__pycache__/
+*.pyc
+.venv/
+mqtt-sample/captured_events/
+mqtt-sample/owner_faces/

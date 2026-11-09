@@ -1,65 +1,73 @@
-# Firmware Smart Home IoT
+# Hệ Thống Nhà Thông Minh IoT Tích Hợp AI (Firmware & MQTT Base)
 
-## Main hardware firmware
+Repository này chứa toàn bộ **Firmware cho 3 cụm phần cứng ESP32** cùng **Bộ giao tiếp MQTT & AI mẫu (`mqtt-sample/`)** đã hoàn thiện để **Thành viên 2 (Backend)** phát triển trực tiếp trên đó.
 
-- `esp32-cluster1-test`: PIR GPIO27, LED GPIO26 and buzzer GPIO25; motion interrupt turns on the LED/buzzer and a new motion extends the 5-second timer. This is the active firmware for cluster 1.
-- `esp32-cluster2-test`: DHT22 GPIO4, LDR ADC GPIO34, BH1750 I2C, light GPIO2 and fan relay GPIO5; automatic darkness and temperature/humidity rules. This is the active firmware for cluster 2.
+---
 
-The two cluster projects match the current physical setup and keep local automation active without Wi-Fi or MQTT. They publish telemetry and status whenever MQTT is available. The earlier `esp32-sensor-node` and `esp32-control-node` projects are retained as prototypes for the original architecture; they use a different pin map.
+## 1. Cấu trúc Repository
 
-## Other firmware
-
-- `esp32-cam`: AI Thinker camera page, motion-triggered JPEG upload, MQTT-controlled SG90 door.
-
-All projects target PlatformIO with Arduino Framework. Install PlatformIO Core or the VS Code extension, then run `pio run` from each project directory.
-
-## Configure Wi-Fi and MQTT
-
-For each cluster and camera project, copy `include/secrets.example.h` to `include/secrets.h` and set Wi-Fi and broker values. In the camera project also set `RECOGNITION_URL` to the backend's LAN HTTP endpoint. Local secrets are ignored by Git. `MQTT_HOST` must be the broker's LAN address, not `localhost`.
-
-The active topics, JSON schemas, HTTP image upload, recognition states and door command are specified in [MQTT_SPEC.md](MQTT_SPEC.md). PubSubClient publishes at QoS 0, so backend must correlate app-level ACKs and use timeouts.
-
-## Cluster 1
-
-`esp32-cluster1-test` uses PIR GPIO27, LED GPIO26 and buzzer GPIO25. A rising PIR interrupt turns on the LED and buzzer; each new trigger restarts the 5-second hold timer. Set `BUZZER_ACTIVE_HIGH` in `include/pins.h` to `false` if the buzzer module is active-low.
-
-```sh
-cd esp32-cluster1-test
-pio run
-pio run -t upload --upload-port COM3
-pio device monitor -b 115200 -p COM3
+```text
+├── esp32-cluster1-test/              # Firmware Cụm ESP 1 (Cảm biến chuyển động PIR + Đèn + Còi)
+├── esp32-cluster2-test/              # Firmware Cụm ESP 2 (DHT22 Nhiệt độ/Độ ẩm + Ánh sáng + Đèn + Quạt)
+├── esp32-cam/                        # Firmware ESP32-CAM (Nhận diện mặt chủ nhà + Mở cửa Servo SG90)
+├── mqtt-sample/                      # Bộ MQTT Broker + Handler + Server FastAPI mẫu cho Thành viên 2
+│   ├── broker.py                     # MQTT 3.1.1 Broker tích hợp bằng Python (không cần cài Docker/Mosquitto)
+│   ├── mqtt_handler.py               # Class SmartHomeMqttService quản lý toàn bộ MQTT Topics & JSON
+│   ├── server_mqtt_sample.py         # Server FastAPI mẫu + Nhận diện mặt chủ nhà + Điều khiển 3 cụm
+│   ├── simulator_esp32.py            # Giả lập cả 3 cụm ESP32 để test Backend khi chưa cắm mạch thật
+│   ├── requirements.txt              # Thư viện Python cần thiết
+│   └── README.md                     # Hướng dẫn chạy cho Thành viên 2
+├── MQTT_SPEC.md                      # Đặc tả chi tiết 16 MQTT Topics & JSON Schema
+└── TONG_QUAN_DU_AN_SMART_HOME_IOT.md # Tài liệu tổng quan đề tài & phân công 3 thành viên
 ```
 
-Replace `COM3` with the port shown by `pio device list`.
+---
 
-## Cluster 2
+## 2. Kịch bản hoạt động của 3 cụm ESP32
 
-`esp32-cluster2-test` follows the supplied wiring: DHT22 GPIO4, LDR analog output GPIO34, BH1750 SDA/SCL GPIO22/21, light output GPIO2, and fan relay input GPIO5. Local control works without Wi-Fi or MQTT; sensor telemetry and output status publish when connected. Light turns on when the LDR ADC reading is below 2000. The fan turns on only when temperature is at least 30 C and humidity is at most 40%; it turns off at 28 C or below, or humidity 45% or above. These are initial control thresholds and can be adjusted in `include/pins.h`. BH1750 lux is reported for comparison; the analog LDR reading drives the light rule, matching the supplied sketch.
+### Cụm ESP 1 (`esp32-cluster1-test`)
+- **Sơ đồ chân (`include/pins.h`):** `PIN_PIR = 27` (HC-SR501), `PIN_LED = 26` (Đèn), `PIN_BUZZER = 25` (Còi).
+- **Kịch bản:** Khi có chuyển động, cảm biến PIR ghi nhận $\rightarrow$ **còi kêu và đèn sáng ngay lập tức**, duy trì 5 giây sau lần chuyển động cuối cùng rồi tự tắt. Gửi sự kiện qua MQTT (`smarthome/security/motion` và `smarthome/sensor/cluster1`) và nhận lệnh điều khiển từ xa qua `smarthome/device/cluster1/command`.
 
-The relay output defaults to active-high. Check the relay module's input polarity before connecting the fan, and power the fan through the relay/driver with a suitable supply. Never power a fan directly from an ESP32 GPIO.
+### Cụm ESP 2 (`esp32-cluster2-test`)
+- **Sơ đồ chân (`include/pins.h`):** `PIN_DHT = 4` (DHT22), `PIN_LDR_ANALOG = 34` (LDR ADC), `PIN_I2C_SDA = 22` / `PIN_I2C_SCL = 21` (BH1750), `PIN_LIGHT_OUTPUT = 2` (Đèn), `PIN_FAN_RELAY = 5` (Quạt).
+- **Kịch bản:**
+  - **Quạt:** Kiểm tra nếu **độ ẩm thấp** ($\le 40\%$) **và nhiệt độ cao** ($\ge 30^\circ\text{C}$) sẽ **bật quạt**, không thỏa điều kiện sẽ **tắt quạt**.
+  - **Đèn:** Cảm biến ánh sáng ghi nhận nếu **trời tối** (`ADC < 2000`) sẽ **bật đèn** và **trời sáng** (`ADC >= 2000`) sẽ **tắt đèn**.
+  - Định kỳ 2 giây gửi dữ liệu lên `smarthome/sensor/cluster2` và nhận lệnh điều khiển qua `smarthome/device/cluster2/command`.
 
-```sh
-cd esp32-cluster2-test
-pio run
-pio run -t upload --upload-port COM3
-pio device monitor -b 115200 -p COM3
-```
+### Cụm Camera AI (`esp32-cam`)
+- **Sơ đồ chân (`include/pins.h`):** Camera OV2640 (AI Thinker) + Động cơ **Servo SG90** tại `SERVO_PIN = 13` ($0^\circ$ = khóa cửa, $90^\circ$ = mở cửa trong 5 giây).
+- **Kịch bản:**
+  - Khi nhận sự kiện chuyển động từ Cụm 1 hoặc bấm chụp trên trang Web của Camera (`http://<ip-cam>/`), ESP32-CAM chụp ảnh JPEG gửi về Backend (`POST /api/security/recognize`) để đối chiếu với khuôn mặt chủ nhà đã lưu sẵn.
+  - **Nếu khớp mặt chủ nhà (`KNOWN`, `authorized: true`, `action: "OPEN"`):** Động cơ Servo SG90 **quay góc $90^\circ$ để mở cửa**, giữ 5 giây rồi tự động quay về $0^\circ$ đóng cửa.
+  - **Nếu không khớp (`UNKNOWN` hoặc `NO_FACE`):** Động cơ Servo SG90 **không quay** (giữ nguyên ở góc $0^\circ$).
 
-Replace `COM3` with the port shown by `pio device list`.
+---
 
-## ESP32-CAM
+## 3. Hướng dẫn nạp Firmware (Thành viên 1)
 
-The camera project uses the AI Thinker pin map, provides a local capture page at `http://<camera-ip>/`, uploads JPEGs to the backend on motion/manual capture, and accepts backend access commands for the SG90 on GPIO13. Confirm the board is AI Thinker and leave the SD slot unused. Recognition runs in backend; the camera fails closed and opens only for a matching `KNOWN` + `authorized: true` command. Power SG90 from a suitable 5V supply with common ground; do not power it from the 3.3V pin. Uploading this firmware replaces the firmware currently on the camera, so the local page will be provided by this project afterward and its IP may differ if DHCP assigns another address.
+Trong mỗi thư mục (`esp32-cluster1-test`, `esp32-cluster2-test`, `esp32-cam`), sao chép `include/secrets.example.h` thành `include/secrets.h`, điền thông tin Wi-Fi cùng địa chỉ IP LAN của máy tính chạy Backend, sau đó nạp code bằng PlatformIO:
 
 ```powershell
-cd esp32-cam
-Copy-Item include/secrets.example.h include/secrets.h
-# Edit secrets.h: Wi-Fi, MQTT broker, and backend LAN URL.
-py -m platformio run
-py -m platformio run -t upload --upload-port COM3
-py -m platformio device monitor -b 115200 -p COM3
+pio run -t upload
+pio device monitor -b 115200
 ```
 
-Use the current serial port instead of `COM3`. The cluster projects use the same secrets setup and PlatformIO upload flow. The camera page's “Chup anh moi” button returns the JPEG and submits it to the backend recognition endpoint.
+---
 
-The older `esp32-sensor-node` and `esp32-control-node` projects use the original draft pin map and message contract. Use them only if the hardware is rewired to match. The active cluster and camera interfaces are documented in [MQTT_SPEC.md](MQTT_SPEC.md).
+## 4. Hướng dẫn chạy MQTT Mẫu & Phát triển Backend (Thành viên 2)
+
+```powershell
+cd mqtt-sample
+pip install -r requirements.txt
+python server_mqtt_sample.py
+```
+- Lệnh trên tự động bật cả **MQTT Broker ở cổng `1883`** và **FastAPI Server ở cổng `8000`**.
+- Mở Swagger UI tại: `http://localhost:8000/docs`
+- Để giả lập dữ liệu từ cả 3 cụm ESP32 khi chưa cắm mạch thật, mở thêm 1 terminal chạy:
+  ```powershell
+  cd mqtt-sample
+  python simulator_esp32.py
+  ```
+- Xem chi tiết toàn bộ MQTT Topics & JSON Schema tại [MQTT_SPEC.md](MQTT_SPEC.md).
