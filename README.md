@@ -1,73 +1,81 @@
-# Hệ Thống Nhà Thông Minh IoT Tích Hợp AI (Firmware & MQTT Base)
+# Hệ Thống Nhà Thông Minh IoT Tích Hợp AI (Full-Stack: Firmware + Backend + Frontend)
 
-Repository này chứa toàn bộ **Firmware cho 3 cụm phần cứng ESP32** cùng **Bộ giao tiếp MQTT & AI mẫu (`mqtt-sample/`)** đã hoàn thiện để **Thành viên 2 (Backend)** phát triển trực tiếp trên đó.
+Dự án hoàn chỉnh đã gộp chung cả **3 thành phần** của nhóm:
+1. **Thành viên 1 (`firmware/` & `mqtt-sample/`):** Firmware PlatformIO cho 3 cụm phần cứng ESP32 (`esp32-cluster1-test`, `esp32-cluster2-test`, `esp32-cam`) + Bộ giả lập MQTT (`simulator_esp32.py`).
+2. **Thành viên 2 (`backend/`):** Hệ thống Backend FastAPI + SQLite + Embedded MQTT Broker (cổng `1883`) + Nhận diện khuôn mặt AI OpenCV + Tự động hóa + WebSocket thời gian thực + Telegram Bot.
+3. **Thành viên 3 (`frontend/`):** Giao diện Web Dashboard React + Vite + TypeScript + Tailwind CSS + Recharts + Điều khiển giọng nói tiếng Việt (Web Speech API).
 
 ---
 
-## 1. Cấu trúc Repository
+## 1. Cấu trúc Dự án Hợp nhất
 
 ```text
-├── esp32-cluster1-test/              # Firmware Cụm ESP 1 (Cảm biến chuyển động PIR + Đèn + Còi)
-├── esp32-cluster2-test/              # Firmware Cụm ESP 2 (DHT22 Nhiệt độ/Độ ẩm + Ánh sáng + Đèn + Quạt)
-├── esp32-cam/                        # Firmware ESP32-CAM (Nhận diện mặt chủ nhà + Mở cửa Servo SG90)
-├── mqtt-sample/                      # Bộ MQTT Broker + Handler + Server FastAPI mẫu cho Thành viên 2
-│   ├── broker.py                     # MQTT 3.1.1 Broker tích hợp bằng Python (không cần cài Docker/Mosquitto)
-│   ├── mqtt_handler.py               # Class SmartHomeMqttService quản lý toàn bộ MQTT Topics & JSON
-│   ├── server_mqtt_sample.py         # Server FastAPI mẫu + Nhận diện mặt chủ nhà + Điều khiển 3 cụm
-│   ├── simulator_esp32.py            # Giả lập cả 3 cụm ESP32 để test Backend khi chưa cắm mạch thật
-│   ├── requirements.txt              # Thư viện Python cần thiết
-│   └── README.md                     # Hướng dẫn chạy cho Thành viên 2
-├── MQTT_SPEC.md                      # Đặc tả chi tiết 16 MQTT Topics & JSON Schema
-└── TONG_QUAN_DU_AN_SMART_HOME_IOT.md # Tài liệu tổng quan đề tài & phân công 3 thành viên
+IOT/
+├── firmware/                         # Phần cứng & Firmware 3 cụm ESP32 (Thành viên 1)
+│   ├── esp32-cluster1-test/          # Cụm ESP 1: Cảm biến chuyển động PIR + Đèn + Còi
+│   ├── esp32-cluster2-test/          # Cụm ESP 2: DHT22 Nhiệt độ/Độ ẩm + Ánh sáng LDR/BH1750 + Đèn + Quạt
+│   └── esp32-cam/                    # Cụm ESP32-CAM: Nhận diện mặt chủ nhà + Mở cửa Servo SG90
+├── backend/                          # Hệ thống Backend chính thức (Thành viên 2)
+│   ├── app/                          # Mã nguồn FastAPI (api, core, models, schemas, services, websocket)
+│   ├── data/                         # SQLite Database (smarthome.db), ảnh mẫu chủ nhà & lịch sử sự kiện
+│   ├── tests/                        # Kiểm thử tự động REST API (test_api.py)
+│   ├── requirements.txt              # Thư viện Python cho Backend
+│   └── run.py                        # Khởi chạy gộp Backend (cổng 8000) + MQTT Broker (cổng 1883)
+├── frontend/                         # Giao diện Web Dashboard React + TypeScript (Thành viên 3)
+│   ├── src/                          # Pages (Dashboard, Devices, Automation, Security, History, Settings, Users)
+│   ├── package.json                  # Thư viện Node.js (React, Tailwind, Recharts, Lucide, Axios)
+│   └── vite.config.ts                # Cấu hình Vite chạy cổng 5173
+├── mqtt-sample/                      # Bộ MQTT mẫu & Script giả lập 3 cụm ESP32 (simulator_esp32.py)
+├── API_SPEC.md                       # Đặc tả 24 REST API & WebSocket
+├── MQTT_SPEC.md                      # Đặc tả 16 MQTT Topics & JSON Schema
+├── WEB_DASHBOARD_SPEC.md             # Đặc tả giao diện Web Dashboard
+└── TONG_QUAN_DU_AN_SMART_HOME_IOT.md # Tổng quan đề tài & phân công nhiệm vụ
 ```
 
 ---
 
-## 2. Kịch bản hoạt động của 3 cụm ESP32
+## 2. Hướng dẫn chạy toàn bộ hệ thống (Backend + Giả lập ESP32 + Frontend)
 
-### Cụm ESP 1 (`esp32-cluster1-test`)
-- **Sơ đồ chân (`include/pins.h`):** `PIN_PIR = 27` (HC-SR501), `PIN_LED = 26` (Đèn), `PIN_BUZZER = 25` (Còi).
-- **Kịch bản:** Khi có chuyển động, cảm biến PIR ghi nhận $\rightarrow$ **còi kêu và đèn sáng ngay lập tức**, duy trì 5 giây sau lần chuyển động cuối cùng rồi tự tắt. Gửi sự kiện qua MQTT (`smarthome/security/motion` và `smarthome/sensor/cluster1`) và nhận lệnh điều khiển từ xa qua `smarthome/device/cluster1/command`.
+Mở **3 cửa sổ PowerShell** tại thư mục gốc `C:\Users\Minh\Desktop\Hoc\IOT`:
 
-### Cụm ESP 2 (`esp32-cluster2-test`)
-- **Sơ đồ chân (`include/pins.h`):** `PIN_DHT = 4` (DHT22), `PIN_LDR_ANALOG = 34` (LDR ADC), `PIN_I2C_SDA = 22` / `PIN_I2C_SCL = 21` (BH1750), `PIN_LIGHT_OUTPUT = 2` (Đèn), `PIN_FAN_RELAY = 5` (Quạt).
-- **Kịch bản:**
-  - **Quạt:** Kiểm tra nếu **độ ẩm thấp** ($\le 40\%$) **và nhiệt độ cao** ($\ge 30^\circ\text{C}$) sẽ **bật quạt**, không thỏa điều kiện sẽ **tắt quạt**.
-  - **Đèn:** Cảm biến ánh sáng ghi nhận nếu **trời tối** (`ADC < 2000`) sẽ **bật đèn** và **trời sáng** (`ADC >= 2000`) sẽ **tắt đèn**.
-  - Định kỳ 2 giây gửi dữ liệu lên `smarthome/sensor/cluster2` và nhận lệnh điều khiển qua `smarthome/device/cluster2/command`.
-
-### Cụm Camera AI (`esp32-cam`)
-- **Sơ đồ chân (`include/pins.h`):** Camera OV2640 (AI Thinker) + Động cơ **Servo SG90** tại `SERVO_PIN = 13` ($0^\circ$ = khóa cửa, $90^\circ$ = mở cửa trong 5 giây).
-- **Kịch bản:**
-  - Khi nhận sự kiện chuyển động từ Cụm 1 hoặc bấm chụp trên trang Web của Camera (`http://<ip-cam>/`), ESP32-CAM chụp ảnh JPEG gửi về Backend (`POST /api/security/recognize`) để đối chiếu với khuôn mặt chủ nhà đã lưu sẵn.
-  - **Nếu khớp mặt chủ nhà (`KNOWN`, `authorized: true`, `action: "OPEN"`):** Động cơ Servo SG90 **quay góc $90^\circ$ để mở cửa**, giữ 5 giây rồi tự động quay về $0^\circ$ đóng cửa.
-  - **Nếu không khớp (`UNKNOWN` hoặc `NO_FACE`):** Động cơ Servo SG90 **không quay** (giữ nguyên ở góc $0^\circ$).
-
----
-
-## 3. Hướng dẫn nạp Firmware (Thành viên 1)
-
-Trong mỗi thư mục (`esp32-cluster1-test`, `esp32-cluster2-test`, `esp32-cam`), sao chép `include/secrets.example.h` thành `include/secrets.h`, điền thông tin Wi-Fi cùng địa chỉ IP LAN của máy tính chạy Backend, sau đó nạp code bằng PlatformIO:
-
+### Cửa sổ 1: Chạy Backend + MQTT Broker (Cổng 8000 & 1883)
 ```powershell
-pio run -t upload
-pio device monitor -b 115200
+cd backend
+pip install -r requirements.txt
+python run.py
 ```
+*(Nếu lệnh `python` trên Windows mở Microsoft Store, dùng `python3.13 run.py`).*
+- Swagger UI: `http://localhost:8000/docs`
+- Tài khoản mặc định:
+  - Quản trị viên (`ADMIN`): `admin` / `admin123`
+  - Người dùng (`USER`): `user` / `user123`
+  - Khách (`GUEST`): `guest` / `guest123`
 
----
-
-## 4. Hướng dẫn chạy MQTT Mẫu & Phát triển Backend (Thành viên 2)
-
+### Cửa sổ 2: Chạy Giả lập 3 cụm ESP32 (Nếu chưa cắm mạch thật)
 ```powershell
 cd mqtt-sample
-pip install -r requirements.txt
-python server_mqtt_sample.py
+python simulator_esp32.py
 ```
-- Lệnh trên tự động bật cả **MQTT Broker ở cổng `1883`** và **FastAPI Server ở cổng `8000`**.
-- Mở Swagger UI tại: `http://localhost:8000/docs`
-- Để giả lập dữ liệu từ cả 3 cụm ESP32 khi chưa cắm mạch thật, mở thêm 1 terminal chạy:
-  ```powershell
-  cd mqtt-sample
-  python simulator_esp32.py
-  ```
-- Xem chi tiết toàn bộ MQTT Topics & JSON Schema tại [MQTT_SPEC.md](MQTT_SPEC.md).
+
+### Cửa sổ 3: Chạy Giao diện Web Frontend (Cổng 5173)
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+- Mở trình duyệt truy cập: **`http://localhost:5173`**
+
+*(Mẹo khi đi Demo: Nếu chạy `npm run build` trong thư mục `frontend/`, Backend tại `http://localhost:8000` sẽ tự động phục vụ luôn cả giao diện Web mà không cần bật cửa sổ thứ 3).*
+
+---
+
+## 3. Hướng dẫn nạp Firmware vào 3 mạch ESP32 thật
+
+Trong từng thư mục con của `firmware/` (`firmware/esp32-cluster1-test`, `firmware/esp32-cluster2-test`, `firmware/esp32-cam`):
+1. Sao chép `include/secrets.example.h` thành `include/secrets.h`.
+2. Điền tên Wi-Fi 2.4GHz, mật khẩu và địa chỉ IP LAN của máy tính đang chạy `backend/run.py`.
+3. Biên dịch và nạp code bằng PlatformIO:
+   ```powershell
+   pio run -t upload
+   pio device monitor -b 115200
+   ```

@@ -107,7 +107,7 @@ frontend/
 |                  |  | 🔔 Còi Buzzer (GPIO25):[ KÊU 🔴 ] | | 🌀 Quạt Mát (GPIO5):   [ BẬT 🟢 ] | |
 |                  |  | (Tự tắt sau 5s khi hết chuyển động)| | (Quạt bật do Nhiệt cao & Ẩm thấp) | |
 |                  |  +------------------------------------+ +-----------------------------------+ |
-|                  |                                                                               |
+|                  |      Khi chọn MANUAL có thể bấm bật tắt ở chữ bật tắt                         |
 |                  |  +--------------------------------------------------------------------------+ |
 |                  |  | 📷 CỤM ESP32-CAM: NHẬN DIỆN CHỦ NHÀ & CỬA SERVO SG90 (GPIO13)           | |
 |                  |  | +------------------------+  Trạng thái cửa: [ 🔓 ĐANG MỞ (Góc 90°) ]     | |
