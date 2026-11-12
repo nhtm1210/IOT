@@ -105,6 +105,7 @@ def control_cam_door(
         person_name=req.person_name,
         confidence=req.confidence,
         event_id=req.event_id,
+        action_override="CLOSE" if req.close else None,
         triggered_by=actor,
     )
     return {"status": "published", "command": sent, "node": mqtt_service.get_snapshot()["esp32_cam_01"]}

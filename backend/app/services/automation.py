@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.config import CAPTURED_EVENTS_DIR
 from app.models.models import Alert, AutomationRule, SystemSetting
 from app.services.telegram_bot import telegram_service
 from app.websocket.manager import ws_manager
@@ -87,10 +88,16 @@ class AutomationEngine:
         ws_manager.broadcast_threadsafe("NEW_ALERT", alert_dict)
 
         if send_telegram and self._is_security_armed(db):
+            image_path = None
+            if image_url:
+                candidate = CAPTURED_EVENTS_DIR / image_url.rsplit("/", 1)[-1]
+                if candidate.exists():
+                    image_path = candidate
             telegram_service.send_alert_background(
                 title=title,
                 message=message,
                 severity=severity,
+                image_path=image_path,
             )
             alert.telegram_sent = True
 
@@ -123,7 +130,7 @@ class AutomationEngine:
                 f"Trạng thái phản ứng: Đèn={'BẬT' if light_on else 'TẮT'}, "
                 f"Còi={'KÊU' if buzzer_on else 'TẮT'}."
             ),
-            send_telegram=True,
+            send_telegram=False,
         )
 
     def evaluate_cluster2_sensor(self, db: Session, payload: Dict[str, Any]) -> None:

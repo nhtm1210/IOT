@@ -26,4 +26,4 @@ constexpr int FLASH_LED_PIN = 4;
 constexpr int SERVO_PIN = 13;
 constexpr int DOOR_CLOSED_DEG = 0;     // Góc đóng/khóa cửa (không quay)
 constexpr int DOOR_OPEN_DEG = 90;      // Góc quay mở cửa khi khớp mặt chủ nhà
-constexpr uint32_t DOOR_OPEN_MS = 5000; // Thời gian giữ cửa mở trước khi tự đóng lại (5 giây)
+// Cửa giữ mở vĩnh viễn; chỉ đóng khi nhận lệnh khóa từ Backend/Web.

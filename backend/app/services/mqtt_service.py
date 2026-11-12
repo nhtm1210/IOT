@@ -734,6 +734,7 @@ class SmartHomeMqttService:
         event_id: Optional[str] = None,
         command_id: Optional[str] = None,
         image_url: Optional[str] = None,
+        action_override: Optional[str] = None,
         triggered_by: str = "FACE_AI",
     ) -> Dict[str, Any]:
         """
@@ -746,9 +747,9 @@ class SmartHomeMqttService:
         cmd_id = command_id or f"access_{uuid.uuid4().hex[:8]}"
         evt_id = event_id or f"evt_{uuid.uuid4().hex[:8]}"
         is_owner = (identity == "KNOWN") and bool(authorized)
-        action = "OPEN" if is_owner else "KEEP_LOCKED"
-        door_state = "OPEN" if is_owner else "LOCKED"
-        servo_deg = 90 if is_owner else 0
+        action = action_override or ("OPEN" if is_owner else "KEEP_LOCKED")
+        door_state = "OPEN" if action == "OPEN" else "LOCKED"
+        servo_deg = 90 if action == "OPEN" else 0
 
         payload: Dict[str, Any] = {
             "schema_version": 1,

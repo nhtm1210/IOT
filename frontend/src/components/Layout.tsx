@@ -4,7 +4,6 @@ import { Activity, Bell, Camera, ChartNoAxesCombined, ChevronLeft, CircleUserRou
 import { useAuth } from '../AuthContext'
 import { useLive } from '../LiveContext'
 import { formatTime } from '../api'
-import { VoiceControl } from './VoiceControl'
 
 const links = [
   { to: '/dashboard', label: 'Tổng quan', icon: House },
@@ -39,7 +38,7 @@ export function Layout() {
       </div>
     </aside>
     <div className="app-main">
-      <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Mở menu" onClick={() => setMenuOpen(true)}><Menu size={21} /></button><div className="breadcrumb"><span>SMART HOME</span><span className="breadcrumb-divider">/</span><strong>{[...links, { to: '/users', label: 'Người dùng', icon: CircleUserRound }].find((item) => item.to === location.pathname)?.label || 'Tổng quan'}</strong></div></div><div className="topbar-right"><div className={`connection-pill ${apiOnline ? 'online' : 'offline'}`}>{apiOnline ? <Wifi size={15} /> : <WifiOff size={15} />}<span>{apiOnline ? 'Backend online' : 'Backend offline'}</span></div><span className="topbar-separator" /><VoiceControl /><button className="alert-button" aria-label={`${alerts?.unread_count || 0} cảnh báo chưa đọc`} onClick={() => navigate('/security')}><Bell size={19} />{alerts?.unread_count ? <span>{alerts.unread_count}</span> : null}</button><div className="header-avatar" title={user?.username}>{user?.full_name?.[0] || user?.username[0]}</div></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" aria-label="Mở menu" onClick={() => setMenuOpen(true)}><Menu size={21} /></button><div className="breadcrumb"><span>SMART HOME</span><span className="breadcrumb-divider">/</span><strong>{[...links, { to: '/users', label: 'Người dùng', icon: CircleUserRound }].find((item) => item.to === location.pathname)?.label || 'Tổng quan'}</strong></div></div><div className="topbar-right"><div className={`connection-pill ${apiOnline ? 'online' : 'offline'}`}>{apiOnline ? <Wifi size={15} /> : <WifiOff size={15} />}<span>{apiOnline ? 'Backend online' : 'Backend offline'}</span></div><span className="topbar-separator" /><button className="alert-button" aria-label={`${alerts?.unread_count || 0} cảnh báo chưa đọc`} onClick={() => navigate('/security')}><Bell size={19} />{alerts?.unread_count ? <span>{alerts.unread_count}</span> : null}</button><div className="header-avatar" title={user?.username}>{user?.full_name?.[0] || user?.username[0]}</div></div></header>
       <main className="content"><Outlet /></main>
       <footer className="app-footer"><span><Camera size={14} /> Hệ thống 3 cụm ESP32</span><span>{socketStatus === 'connected' ? 'Dữ liệu trực tiếp' : 'Đang dùng cập nhật định kỳ'} · {lastUpdated ? `Cập nhật ${formatTime(lastUpdated.toISOString())}` : 'Chưa cập nhật'}</span></footer>
     </div>

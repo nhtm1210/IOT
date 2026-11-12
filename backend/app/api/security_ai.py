@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import CAPTURED_EVENTS_DIR, settings
-from app.core.database import get_db
+from app.core.database import db_session, get_db
 from app.core.security import rate_limiter, require_operator, verify_device_api_key
 from app.models.models import RecognitionHistory
 from app.schemas.schemas import RecognitionOut
@@ -32,6 +32,7 @@ from app.services.face_recognition import (
     match_owner_face,
     save_owner_face,
 )
+from app.services.automation import automation_engine
 from app.services.mqtt_service import mqtt_service
 from app.websocket.manager import ws_manager
 
@@ -115,6 +116,21 @@ async def recognize_from_esp32_cam(
         image_url=image_url,
         triggered_by="FACE_AI",
     )
+    if event_id.startswith("motion_"):
+        with db_session() as db:
+            automation_engine.create_and_broadcast_alert(
+                db=db,
+                alert_type="MOTION_CAPTURE",
+                severity="WARNING" if identity != "UNKNOWN" else "CRITICAL",
+                cluster_id="esp32_cluster1",
+                title="Phát hiện chuyển động - ảnh từ ESP32-CAM",
+                message=(
+                    f"Camera đã chụp ảnh sau sự kiện PIR. Kết quả AI: {identity}"
+                    + (f" ({person_name}, {confidence * 100:.1f}%)." if person_name != "none" else ".")
+                ),
+                image_url=image_url,
+                send_telegram=True,
+            )
     command_payload["threshold"] = get_face_threshold()
     command_payload["servo_angle_deg"] = 90 if authorized else 0
     return command_payload

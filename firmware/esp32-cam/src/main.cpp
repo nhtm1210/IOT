@@ -61,7 +61,6 @@ bool cameraReady = false;
 bool webStarted = false;
 bool doorOpen = false;
 int currentServoDeg = DOOR_CLOSED_DEG;
-uint32_t doorOpenedAt = 0;
 uint32_t lastWiFiAttempt = 0;
 uint32_t lastMqttAttempt = 0;
 uint32_t lastCaptureAt = 0;
@@ -108,6 +107,21 @@ bool initializeCamera() {
     Serial.printf("[camera] init failed: 0x%x\n", result);
     return false;
   }
+  // Bật xử lý màu tự động của OV2640 để tránh ảnh xanh/tím khi ánh sáng thay đổi.
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor) {
+    sensor->set_special_effect(sensor, 0); // màu tự nhiên
+    sensor->set_whitebal(sensor, 1);       // auto white balance
+    sensor->set_awb_gain(sensor, 1);
+    sensor->set_wb_mode(sensor, 0);        // auto WB mode
+    sensor->set_exposure_ctrl(sensor, 1);  // auto exposure
+    sensor->set_aec2(sensor, 1);
+    sensor->set_gain_ctrl(sensor, 1);      // auto gain
+    sensor->set_bpc(sensor, 1);
+    sensor->set_wpc(sensor, 1);
+    sensor->set_raw_gma(sensor, 1);
+    sensor->set_lenc(sensor, 1);
+  }
   Serial.printf("[camera] ready, psram=%s\n", psramFound() ? "yes" : "no");
   return true;
 }
@@ -138,7 +152,6 @@ void setDoor(bool open) {
   currentServoDeg = open ? DOOR_OPEN_DEG : DOOR_CLOSED_DEG;
   doorServo.write(currentServoDeg);
   if (open) {
-    doorOpenedAt = millis();
     Serial.printf("[door] MATCHED OWNER -> Servo SG90 rotated to %d deg (DOOR OPEN)\n",
                   currentServoDeg);
   } else {
@@ -225,11 +238,14 @@ void applyAccessDecision(const char *commandId, const char *eventId,
     return;
   }
 
-  // Trường hợp không khớp mặt chủ nhà -> không quay servo SG90 (giữ cửa khóa ở 0 độ)
-  setDoor(false);
+  // KEEP_LOCKED từ nhận diện chỉ giữ nguyên trạng thái hiện tại. Lệnh CLOSE
+  // riêng từ Web mới được phép đóng một cửa đang mở.
+  if (strcmp(action, "CLOSE") == 0) {
+    setDoor(false);
+  }
   publishRecognitionEvent(eventId, lastIdentity.c_str(), lastPersonName.c_str(),
                           lastConfidence, false);
-  if (strcmp(action, "KEEP_LOCKED") == 0) {
+  if (strcmp(action, "KEEP_LOCKED") == 0 || strcmp(action, "CLOSE") == 0) {
     publishDoorAck(commandId, eventId, true, nullptr);
   } else {
     publishDoorAck(commandId, eventId, false, "FACE_NOT_MATCHED_KEEP_LOCKED");
@@ -277,7 +293,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     const bool pir = doc["pir"] | true;
     if (pir && eventId[0]) {
       pendingMotionEvent = eventId;
-      Serial.printf("[motion] trigger received from Cluster 1: %s\n", eventId);
+      Serial.printf("[motion] trigger received -> capture event=%s\n", eventId);
     }
   } else if (strcmp(topic, ACCESS_COMMAND_TOPIC) == 0) {
     handleAccessCommand(payload, length);
@@ -485,12 +501,6 @@ void loop() {
   processMotionCapture();
 
   const uint32_t now = millis();
-  // Tự động đóng cửa (quay Servo SG90 về 0 độ) sau khi mở đủ DOOR_OPEN_MS (5 giây)
-  if (doorOpen && now - doorOpenedAt >= DOOR_OPEN_MS) {
-    Serial.println("[door] Auto-lock timeout reached -> closing door");
-    setDoor(false);
-  }
-
   if (mqtt.connected() && now - lastStatusAt >= STATUS_INTERVAL_MS) {
     lastStatusAt = now;
     publishCameraStatus(true);

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib import parse, request
@@ -66,6 +67,7 @@ class TelegramBotService:
         bot_token: Optional[str] = None,
         chat_id: Optional[str] = None,
         force: bool = False,
+        image_path: Optional[Path] = None,
     ) -> Tuple[bool, str]:
         """Gửi tin nhắn Telegram đồng bộ (an toàn khi gọi từ thread hoặc test endpoint)."""
         enabled, token, cid = self._get_credentials(bot_token, chat_id)
@@ -74,18 +76,45 @@ class TelegramBotService:
         if not token or not cid:
             return False, "Chưa cấu hình TELEGRAM_BOT_TOKEN hoặc TELEGRAM_CHAT_ID"
 
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        data = parse.urlencode(
-            {
-                "chat_id": cid,
-                "text": text,
-                "parse_mode": "HTML",
-            }
-        ).encode("utf-8")
-
         try:
-            req = request.Request(url, data=data, method="POST")
-            with request.urlopen(req, timeout=8) as resp:
+            image_path = Path(image_path) if image_path and Path(image_path).exists() else None
+            if image_path:
+                # Gửi ảnh + caption qua Telegram sendPhoto (multipart/form-data)
+                boundary = f"----smarthome{uuid.uuid4().hex}"
+                caption = text[:1000]
+                fields = [("chat_id", cid), ("caption", caption), ("parse_mode", "HTML")]
+                body = b""
+                for name, value in fields:
+                    body += (
+                        f"--{boundary}\r\n"
+                        f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                        f"{value}\r\n"
+                    ).encode("utf-8")
+                body += (
+                    f"--{boundary}\r\n"
+                    'Content-Disposition: form-data; name="photo"; filename="alert.jpg"\r\n'
+                    "Content-Type: image/jpeg\r\n\r\n"
+                ).encode("utf-8")
+                body += image_path.read_bytes() + f"\r\n--{boundary}--\r\n".encode("utf-8")
+                url = f"https://api.telegram.org/bot{token}/sendPhoto"
+                req = request.Request(
+                    url,
+                    data=body,
+                    method="POST",
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                )
+            else:
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                data = parse.urlencode(
+                    {
+                        "chat_id": cid,
+                        "text": text,
+                        "parse_mode": "HTML",
+                    }
+                ).encode("utf-8")
+                req = request.Request(url, data=data, method="POST")
+
+            with request.urlopen(req, timeout=15) as resp:
                 if 200 <= resp.status < 300:
                     logger.info("[Telegram] Đã gửi cảnh báo thành công tới chat_id=%s", cid)
                     return True, "Đã gửi tin nhắn Telegram thành công"
@@ -106,7 +135,7 @@ class TelegramBotService:
         formatted = f"{icon} <b>{title}</b>\n{message}"
 
         def _worker() -> None:
-            self.send_message_sync(formatted)
+            self.send_message_sync(formatted, image_path=image_path)
 
         t = threading.Thread(target=_worker, daemon=True)
         t.start()

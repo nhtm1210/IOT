@@ -30,8 +30,7 @@ export function DevicesPage() {
   }
 
   async function door(open: boolean) {
-    if (open && !window.confirm('Mở khóa cửa trong 5 giây?')) return
-    try { await sendCommand('esp32_cam_01', '/api/mqtt/cam/door', { identity: open ? 'KNOWN' : 'UNKNOWN', authorized: open, person_name: user?.full_name || user?.username || 'Web', confidence: open ? 1 : 0 }, { door_state: open ? 'OPEN' : 'LOCKED' }) }
+    try { await sendCommand('esp32_cam_01', '/api/mqtt/cam/door', { identity: 'KNOWN', authorized: open, close: !open, person_name: user?.full_name || user?.username || 'Web', confidence: 1 }, { door_state: open ? 'OPEN' : 'LOCKED' }) }
     catch (error) { notify(apiError(error), 'error') }
   }
 

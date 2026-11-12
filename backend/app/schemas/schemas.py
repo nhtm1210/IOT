@@ -74,6 +74,7 @@ class CamDoorCommandRequest(BaseModel):
     person_name: str = Field(default="Admin")
     confidence: float = Field(default=0.99, ge=0.0, le=1.0)
     event_id: Optional[str] = None
+    close: bool = Field(default=False, description="True = đóng cửa theo lệnh thủ công từ Web")
 
 
 # =====================================================================
